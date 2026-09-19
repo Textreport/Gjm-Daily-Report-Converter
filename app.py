@@ -13,71 +13,28 @@ from openpyxl.utils import get_column_letter
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
 
-# =========================================================
-# PAGE SETUP
-# =========================================================
-
 st.set_page_config(
     page_title="GJM Bank Report Converter",
     page_icon="🏦",
-    layout="centered"
+    layout="centered",
 )
 
 st.markdown("""
 <style>
-.main-title {
-    text-align: center;
-    color: #1F4E78;
-    font-size: 26px;
-    font-weight: bold;
-    margin-bottom: 5px;
-}
-.sub-title {
-    text-align: center;
-    color: #555555;
-    font-size: 15px;
-    margin-bottom: 20px;
-}
-.stButton button {
-    width: 100%;
-    min-height: 52px;
-    font-size: 16px;
-    font-weight: bold;
-    border-radius: 8px;
-}
-.stDownloadButton button {
-    width: 100%;
-    min-height: 52px;
-    background-color: #1F4E78;
-    color: white;
-    font-weight: bold;
-    font-size: 16px;
-    border-radius: 8px;
-}
-@media (max-width: 600px) {
-    .main-title { font-size: 21px !important; line-height: 1.3; }
-    .sub-title { font-size: 13px !important; line-height: 1.5; }
-    .stButton button, .stDownloadButton button {
-        min-height: 54px !important;
-        font-size: 16px !important;
-    }
+.main-title{text-align:center;color:#1F4E78;font-size:26px;font-weight:700;margin-bottom:5px}
+.sub-title{text-align:center;color:#555;font-size:15px;margin-bottom:20px}
+.stButton button,.stDownloadButton button{width:100%;min-height:52px;border-radius:8px;font-weight:700;font-size:16px}
+.stDownloadButton button{background:#1F4E78;color:white}
+@media(max-width:600px){
+ .main-title{font-size:21px!important;line-height:1.3}
+ .sub-title{font-size:13px!important}
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(
-    '<div class="main-title">🏦 GJM Bank Reports to Excel Converter</div>',
-    unsafe_allow_html=True
-)
-st.markdown(
-    '<div class="sub-title">📱 Mobile અને Desktop બંને માટે • ZIP / TXT / GZ → Excel</div>',
-    unsafe_allow_html=True
-)
+st.markdown('<div class="main-title">🏦 GJM Bank Reports to Excel Converter</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">📱 Mobile + Desktop • ZIP / TXT / GZ → Excel</div>', unsafe_allow_html=True)
 
-
-# =========================================================
-# REPORT CLEANING / PARSING
-# =========================================================
 
 IGNORE_PATTERNS = [
     "REPORT ID:", "PROC DATE:", "RUN DATE:", "BRANCH :", "BRANCH NO.",
@@ -88,594 +45,510 @@ IGNORE_PATTERNS = [
 ]
 
 
-def sanitize_text(val):
-    if val is None:
+def clean_text(v):
+    if v is None:
         return ""
-    return ILLEGAL_CHARACTERS_RE.sub("", str(val)).strip()
+    return ILLEGAL_CHARACTERS_RE.sub("", str(v)).strip()
 
 
-def clean_dr_amount(val):
-    val_str = sanitize_text(val)
-    if not val_str:
+def clean_amount(v):
+    s = clean_text(v)
+    if not s:
         return ""
-
-    if re.search(r"\bDr\b", val_str, re.IGNORECASE) or val_str.lower().endswith("dr"):
-        num_clean = re.sub(r"(?i)\s*dr\s*", "", val_str).strip()
-        return f"-{num_clean}" if not num_clean.startswith("-") else num_clean
-
-    if re.search(r"\bCr\b", val_str, re.IGNORECASE):
-        return re.sub(r"(?i)\s*cr\s*", "", val_str).strip()
-
-    return val_str
+    if re.search(r"(?i)\bdr\b$", s):
+        s = re.sub(r"(?i)\s*dr\s*$", "", s).strip()
+        return "-" + s if not s.startswith("-") else s
+    if re.search(r"(?i)\bcr\b$", s):
+        return re.sub(r"(?i)\s*cr\s*$", "", s).strip()
+    return s
 
 
-def parse_deposits_balance_report(lines):
-    pattern = re.compile(
-        r"^\s*(\d{11}-\d|\d{8,16})\s+"
-        r"(\S+(?:\s\S+)*)\s{2,}"
-        r"(.+?)\s{2,}"
-        r"([\d,]+\.\d{2})\s+"
-        r"([\d,]+\.\d{2})\s+"
-        r"([\d,]+\.\d{2}(?:\s*Dr)?)\s+"
-        r"([\d,]+\.\d{2})\s*"
-        r"(?:\s+(\d+[DMY]))?"
-        r"\s+([\d,]+\.\d{2})"
-        r"\s+([A-Z]+)"
-        r"\s+([YN])\s*$",
-        re.IGNORECASE
-    )
+def parse_fixed_by_header(lines, header_line, data_test, columns):
+    """
+    Uses the positions of column labels in the report header.
+    This is much safer than splitting on arbitrary whitespace.
+    """
+    starts = []
+    for col in columns:
+        p = header_line.upper().find(col.upper())
+        if p < 0:
+            return None
+        starts.append(p)
 
     rows = []
     for line in lines:
-        clean_line = sanitize_text(line)
-        match = pattern.match(clean_line)
-        if match:
-            rows.append({
-                "ACCOUNT NUMBER": match.group(1).strip(),
-                "ACCOUNT TYPE (DESCRIPTION)": match.group(2).strip(),
-                "CUSTOMER NAME": match.group(3).strip(),
-                "AVAILABLE BALANCE": match.group(4).strip(),
-                "UNCLEARED BALANCE": match.group(5).strip(),
-                "CURRENT BALANCE": clean_dr_amount(match.group(6)),
-                "LIMIT": match.group(7).strip(),
-                "TERM": match.group(8).strip() if match.group(8) else "",
-                "INT-RATE": match.group(9).strip(),
-                "STATUS": match.group(10).strip(),
-                "JOINT-HOLD-FLAG": match.group(11).strip()
-            })
+        if not data_test(line):
+            continue
+        values = []
+        for i, start in enumerate(starts):
+            end = starts[i + 1] if i + 1 < len(starts) else len(line)
+            values.append(clean_text(line[start:end]))
+        if any(values):
+            rows.append(values)
 
-    return pd.DataFrame(rows) if rows else None
+    return pd.DataFrame(rows, columns=columns) if rows else None
 
 
-def parse_pipe_delimited(lines):
-    header_cols = []
-    data_rows = []
-
+def parse_npa(lines):
+    pattern = re.compile(
+        r"^\s*(\d+)\s+(\d{5})\s+(\S+)\s+(\d+)\s+(\d+)\s+"
+        r"(.*?)\s+"
+        r"(-?[\d,]+\.\d{2})\s+"
+        r"(-?[\d,]+(?:\.\d+)?)\s+"
+        r"(-?[\d,]+(?:\.\d+)?)\s+"
+        r"(-?[\d,]+(?:\.\d+)?)\s+"
+        r"(-?[\d,]+\.\d{2})\s+"
+        r"(\d{2}-[A-Z]{3}-\d{2})\s+"
+        r"(\d{2}-[A-Z]{3}-\d{2})\s+"
+        r"(\S+)\s+(\S+)\s+(.*)$",
+        re.I
+    )
+    rows = []
     for line in lines:
-        clean_line = sanitize_text(line)
-        if not clean_line:
+        m = pattern.match(line)
+        if m:
+            rows.append([
+                m.group(1),m.group(2),m.group(3),m.group(4),m.group(5),
+                clean_text(m.group(6)),clean_amount(m.group(7)),
+                clean_amount(m.group(8)),clean_amount(m.group(9)),
+                clean_amount(m.group(10)),clean_amount(m.group(11)),
+                m.group(12),m.group(13),m.group(14),m.group(15),
+                clean_text(m.group(16))
+            ])
+    if not rows:
+        return None
+    return pd.DataFrame(rows, columns=[
+        "SR_NO","BR_NO","SYS","ACCT_NO","CUST_NO","PROD_DESCRIPTION",
+        "BAL_OUTSTAND","OVERDUE_INT","INCA","UIPY","IRR_AMT",
+        "LST_ARR_D","NPA_DATE","NI","OI","NAME"
+    ])
+
+
+
+def parse_probable_npa(lines):
+    pattern = re.compile(
+        r"^\s*(\d+)\s+(\d{8,}-\d+)\s+(.*?)\s+"
+        r"([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+"
+        r"(\d+)\s+(\d{5})\s*(.*?)$",
+        re.I
+    )
+    rows = []
+    facility_words = re.compile(
+        r"\b(LOAN|CC|OD|CASH|TERM|OVERDRAFT|AGRICULTURE|HOUSING|PERSONAL)\b",
+        re.I
+    )
+    for line in lines:
+        m = pattern.match(line)
+        if not m:
             continue
-        if re.match(r"^-{10,}", clean_line):
+        before_limit = m.group(3).strip()
+        fm = facility_words.search(before_limit)
+        if fm:
+            account_name = before_limit[:fm.start()].strip()
+            facility = before_limit[fm.start():].strip()
+        else:
+            account_name = before_limit
+            facility = ""
+        tail = m.group(8)
+        # Fixed-width report leaves phone columns blank; split the remaining
+        # text conservatively into office phone, home phone and remarks.
+        tail_parts = re.split(r"\s{2,}", tail.strip()) if tail.strip() else []
+        office = tail_parts[0] if len(tail_parts) > 0 and re.fullmatch(r"\d+", tail_parts[0]) else ""
+        home = tail_parts[1] if len(tail_parts) > 1 and re.fullmatch(r"\d+", tail_parts[1]) else ""
+        remarks = " ".join(tail_parts[2:] if office or home else tail_parts).strip()
+        rows.append([
+            m.group(1),m.group(2),account_name,facility,m.group(4),
+            m.group(5),m.group(6),m.group(7),office,home,remarks
+        ])
+    if not rows:
+        return None
+    return pd.DataFrame(rows, columns=[
+        "SR.NO.","ACCOUNT NO.","ACCOUNT-NAME","FACILITY","LIMIT",
+        "OUTSTANDING","RISK-GRADE","HOME-BRCH","OFFICE-PHONE",
+        "HOME-PHONE","REMARKS"
+    ])
+
+
+
+def parse_glcc_detail(lines):
+    pattern = re.compile(
+        r"^\s*(\d+)\s+(\d{8,14})\s+(\d{8,14})\s+"
+        r"(.*?)\s+"
+        r"(-?[\d,]+\.\d{2})\s+(-?[\d,]+\.\d{2})\s+"
+        r"(-?[\d,]+\.\d{2})\s+(-?[\d,]+\.\d{2})\s+"
+        r"(-?[\d,]+\.\d{2})\s+(-?[\d,]+\.\d{2})\s+"
+        r"(-?[\d,]+\.\d{2})\s*$"
+    )
+    rows = []
+    for line in lines:
+        m = pattern.match(line)
+        if m:
+            rows.append([
+                m.group(1),m.group(2),m.group(3),clean_text(m.group(4)),
+                *[clean_amount(m.group(i)) for i in range(5,12)]
+            ])
+    if not rows:
+        return None
+    return pd.DataFrame(rows, columns=[
+        "SLNO","CUSTOMER","ACCOUNT","NAME OF ACCOUNT","DR.BALANCE",
+        "CR.BALANCE","INT.BALANCE","RATE","OD-DR-INT-BAL",
+        "UNCLRED-BAL","COLL-AMT"
+    ])
+
+
+
+def parse_daily_productwise(lines):
+    # This report is pipe-delimited. Ignore visual/group headers and totals.
+    rows = []
+    active_product = ""
+    for line in lines:
+        s = line.rstrip("\r\n")
+        if "PROD CODE :" in s.upper():
+            m = re.search(r"PROD CODE\s*:\s*([0-9 ]+)\s+PROD DESC\s*:\s*(.*)", s, re.I)
+            if m:
+                active_product = m.group(1).strip() + " - " + m.group(2).strip()
             continue
-        if any(kw in clean_line.upper() for kw in IGNORE_PATTERNS):
+
+        if "|" not in s:
             continue
-        if "|" not in clean_line:
+        if "S.NO." in s.upper() or "ACCOUNT NO'S" in s.upper():
             continue
 
-        parts = [clean_dr_amount(p) for p in clean_line.split("|")]
-        if parts and parts[0] == "":
-            parts = parts[1:]
-        if parts and parts[-1] == "":
-            parts = parts[:-1]
+        parts = [clean_amount(x) for x in s.split("|")]
+        # Expected: SNO + ACCOUNT + 8 amount columns + optional empty final cell.
+        if len(parts) < 10:
+            continue
 
-        if not header_cols and any(
-            w in clean_line.upper()
-            for w in ["NAME", "ACCOUNT", "AMOUNT", "LIMIT", "DATE", "PRODUCT"]
-        ):
-            header_cols = parts
-        elif header_cols and len(parts) >= 2:
-            if len(parts) < len(header_cols):
-                parts.extend([""] * (len(header_cols) - len(parts)))
-            data_rows.append(parts[:len(header_cols)])
+        sno = parts[0].strip()
+        account = parts[1].strip()
+        if not re.fullmatch(r"\d+", sno or "") or not account:
+            continue
 
-    return pd.DataFrame(data_rows, columns=header_cols) if header_cols and data_rows else None
+        amounts = parts[2:10]
+        while len(amounts) < 8:
+            amounts.append("")
 
+        rows.append([active_product, sno, account] + amounts)
 
-def parse_general_cbs_report(lines):
-    header_index = -1
-
-    for i, line in enumerate(lines):
-        clean_line = sanitize_text(line)
-        if re.match(r"^\s*-{15,}", clean_line) and i + 2 < len(lines):
-            if re.match(r"^\s*-{15,}", sanitize_text(lines[i + 2])):
-                header_index = i + 1
-                break
-
-    if header_index == -1:
+    if not rows:
         return None
 
     cols = [
-        m.group(1).strip()
-        for m in re.finditer(
-            r"(\S+(?:\s(?!\s)\S+)*)",
-            sanitize_text(lines[header_index])
-        )
+        "PRODUCT","S.NO.","ACCOUNT NO.",
+        "CASH CREDIT","CASH DEBIT",
+        "CLEARING CREDIT","CLEARING DEBIT",
+        "TRANSFER CREDIT","TRANSFER DEBIT",
+        "PRODUCT TOTAL CREDIT","PRODUCT TOTAL DEBIT"
     ]
-    if len(cols) < 2:
+    return pd.DataFrame(rows, columns=cols)
+
+
+def parse_pipe(lines):
+    header = None
+    for line in lines:
+        if "|" in line and any(w in line.upper() for w in ["ACCOUNT","NAME","AMOUNT","DATE","PRODUCT"]):
+            parts = [clean_text(x) for x in line.split("|")]
+            if len(parts) >= 2:
+                header = parts
+                break
+    if not header:
         return None
 
     rows = []
-    for line in lines[header_index + 2:]:
-        clean_line = sanitize_text(line)
-        if not clean_line:
+    for line in lines:
+        if "|" not in line or line.strip().startswith("-"):
             continue
-        if re.match(r"^-{10,}", clean_line):
+        parts = [clean_amount(x) for x in line.split("|")]
+        if len(parts) < 2 or parts == header:
             continue
-        if any(kw in clean_line.upper() for kw in IGNORE_PATTERNS):
+        if any(k in line.upper() for k in IGNORE_PATTERNS):
             continue
-        if "ACCOUNT NUMBER" in clean_line.upper():
-            continue
+        if len(parts) < len(header):
+            parts += [""] * (len(header) - len(parts))
+        rows.append(parts[:len(header)])
 
-        parts = [
-            p.strip()
-            for p in re.split(r"\s{2,}", clean_line)
-            if p.strip()
-        ]
-
-        if len(parts) > 1:
-            rows.append({
-                cols[k]: clean_dr_amount(parts[k]) if k < len(parts) else ""
-                for k in range(len(cols))
-            })
-
-    return pd.DataFrame(rows) if rows else None
+    return pd.DataFrame(rows, columns=header) if rows else None
 
 
-def parse_csv_generic(content):
-    clean_content = sanitize_text(content)
-    if not clean_content.strip():
-        return None
+def parse_general(lines):
+    # Fallback for reports whose columns are genuinely separated by 2+ spaces.
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*-{15,}", line) and i + 2 < len(lines):
+            if re.match(r"^\s*-{15,}", lines[i + 2]):
+                header = lines[i + 1]
+                parts = [x.strip() for x in re.split(r"\s{2,}", header.strip()) if x.strip()]
+                if len(parts) < 2:
+                    continue
 
+                rows = []
+                for data in lines[i + 3:]:
+                    s = clean_text(data)
+                    if not s or re.match(r"^-{10,}", s):
+                        continue
+                    if any(k in s.upper() for k in IGNORE_PATTERNS):
+                        continue
+                    p = [x.strip() for x in re.split(r"\s{2,}", s) if x.strip()]
+                    if len(p) >= 2:
+                        if len(p) < len(parts):
+                            p += [""] * (len(parts) - len(p))
+                        rows.append(p[:len(parts)])
+                if rows:
+                    return pd.DataFrame(rows, columns=parts)
+    return None
+
+
+def parse_report(text):
+    lines = text.splitlines()
+    u = text.upper()
+
+    # Specific parsers first.
+    if "NPA / OVERDUE STATEMENT REPORT" in u and "BAL_OUTSTAND" in u:
+        df = parse_npa(lines)
+        if df is not None and not df.empty:
+            return df, "NPA_STMT"
+
+    if "NPA CLASSIFICATION REPORT" in u and "ACCOUNT-NAME" in u:
+        df = parse_probable_npa(lines)
+        if df is not None and not df.empty:
+            return df, "PROBABLE_NPA"
+
+    if "BALANCE IN DEPOSITS ACCOUNTS - GL-CLASS-CODE WISE - DETAIL" in u:
+        df = parse_glcc_detail(lines)
+        if df is not None and not df.empty:
+            return df, "GLCC_WISE_DETAIL"
+
+    if "CASH-CLG-TRANSFER TRAN CONTROL REPORT" in u:
+        df = parse_daily_productwise(lines)
+        if df is not None and not df.empty:
+            return df, "DAILY_PRODUCTWISE"
+
+    # Existing-style specialized deposit report.
+    dep_pattern = re.compile(
+        r"^\s*(\d{11}-\d|\d{8,16})\s+"
+        r"(\S+(?:\s\S+)*)\s{2,}(.+?)\s{2,}"
+        r"([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+"
+        r"([\d,]+\.\d{2}(?:\s*Dr)?)\s+([\d,]+\.\d{2})\s*"
+        r"(?:\s+(\d+[DMY]))?\s+([\d,]+\.\d{2})\s+([A-Z]+)\s+([YN])\s*$",
+        re.I
+    )
+    if "AVAILABLE BALANCE" in u:
+        out = []
+        for line in lines:
+            m = dep_pattern.match(clean_text(line))
+            if m:
+                out.append({
+                    "ACCOUNT NUMBER":m.group(1),
+                    "ACCOUNT TYPE (DESCRIPTION)":m.group(2),
+                    "CUSTOMER NAME":m.group(3),
+                    "AVAILABLE BALANCE":m.group(4),
+                    "UNCLEARED BALANCE":m.group(5),
+                    "CURRENT BALANCE":clean_amount(m.group(6)),
+                    "LIMIT":m.group(7),
+                    "TERM":m.group(8) or "",
+                    "INT-RATE":m.group(9),
+                    "STATUS":m.group(10),
+                    "JOINT-HOLD-FLAG":m.group(11),
+                })
+        if out:
+            return pd.DataFrame(out), "DEPOSITS_BALANCE"
+
+    df = parse_pipe(lines)
+    if df is not None and not df.empty:
+        return df, "PIPE"
+
+    df = parse_general(lines)
+    if df is not None and not df.empty:
+        return df, "GENERAL"
+
+    # Last-resort CSV/tab parser.
     try:
-        delimiter = csv.Sniffer().sniff(
-            clean_content[:4096],
-            delimiters=[",", "\t", "|", ";"]
-        ).delimiter
+        sample = clean_text(text)
+        delim = csv.Sniffer().sniff(sample[:4096], delimiters=[",","\t",";"]).delimiter
+        df = pd.read_csv(io.StringIO(sample), sep=delim, engine="python", on_bad_lines="skip")
+        if not df.empty:
+            return df, "CSV"
     except Exception:
-        delimiter = "," if "," in clean_content else "\t"
+        pass
 
-    try:
-        df = pd.read_csv(
-            io.StringIO(clean_content),
-            sep=delimiter,
-            engine="python",
-            on_bad_lines="skip",
-            encoding_errors="ignore"
-        )
-    except Exception:
-        return None
-
-    for col in df.columns:
-        if df[col].dtype == object:
-            df[col] = df[col].apply(clean_dr_amount)
-
-    return df if not df.empty else None
+    # Final safety net: never lose a report just because its layout is new.
+    # It is exported as one clean LINE column, preserving the original text.
+    raw_lines = [clean_text(x) for x in lines if clean_text(x)]
+    if raw_lines:
+        return pd.DataFrame({"LINE": raw_lines}), "RAW_TEXT"
+    return None, "EMPTY"
 
 
-def parse_report(content_string):
-    lines = content_string.splitlines()
-    upper_content = content_string.upper()
-
-    df = None
-
-    if "DEPOSITS BALANCE FILE" in upper_content or "AVAILABLE BALANCE" in upper_content:
-        df = parse_deposits_balance_report(lines)
-
-    if df is None or df.empty:
-        pipe_count = sum(1 for line in lines[:50] if line.count("|") >= 3)
-        if pipe_count >= 3:
-            df = parse_pipe_delimited(lines)
-
-    if df is None or df.empty:
-        df = parse_general_cbs_report(lines)
-
-    if df is None or df.empty:
-        df = parse_csv_generic(content_string)
-
-    return df
+def decode_bytes(data):
+    for enc in ("utf-8-sig","utf-8","cp1252","latin1"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            pass
+    return data.decode("latin1", errors="replace")
 
 
-# =========================================================
-# EXCEL CREATION
-# =========================================================
+def extract_files(uploaded_name, uploaded_bytes):
+    items = []
+    info = []
 
-def convert_to_excel(df):
-    output = io.BytesIO()
+    def add(name, raw, source):
+        # Only text-like files from archives are sent to the report parser.
+        lower = name.lower()
+        if lower.endswith(".gz"):
+            raw = gzip.decompress(raw)
+            name = os.path.splitext(name)[0]
+        if lower.endswith((".txt",".csv",".dat",".log",".gz")) or source == "direct":
+            items.append((os.path.basename(name), raw))
+            info.append((name, len(raw), "OK"))
+
+    if uploaded_name.lower().endswith(".zip"):
+        with zipfile.ZipFile(io.BytesIO(uploaded_bytes), "r") as z:
+            for member in z.infolist():
+                if member.is_dir():
+                    continue
+                base = os.path.basename(member.filename)
+                if not base or base.startswith("."):
+                    continue
+                try:
+                    add(base, z.read(member), "zip")
+                except Exception as e:
+                    info.append((member.filename, 0, f"ERROR: {e}"))
+    elif uploaded_name.lower().endswith(".gz"):
+        add(uploaded_name, uploaded_bytes, "direct")
+    else:
+        add(uploaded_name, uploaded_bytes, "direct")
+
+    return items, info
+
+
+def make_excel(df):
+    out = io.BytesIO()
     wb = Workbook()
     ws = wb.active
     ws.title = "Converted Report"
 
-    clean_headers = [sanitize_text(c) for c in df.columns]
-    ws.append(clean_headers)
+    headers = [clean_text(x) for x in df.columns]
+    ws.append(headers)
 
-    header_fill = PatternFill(
-        start_color="1F4E78",
-        end_color="1F4E78",
-        fill_type="solid"
-    )
-    header_font = Font(
-        name="Calibri", size=11, bold=True, color="FFFFFF"
-    )
-    data_font = Font(name="Calibri", size=10)
+    fill = PatternFill("solid", fgColor="1F4E78")
+    font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    body_font = Font(name="Calibri", size=10)
+    side = Side(style="thin", color="D9D9D9")
+    border = Border(left=side,right=side,top=side,bottom=side)
 
-    border = Border(
-        left=Side(style="thin", color="D9D9D9"),
-        right=Side(style="thin", color="D9D9D9"),
-        top=Side(style="thin", color="D9D9D9"),
-        bottom=Side(style="thin", color="D9D9D9")
-    )
-
-    for cell in ws[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(
-            horizontal="center",
-            vertical="center",
-            wrap_text=True
-        )
+    for c in ws[1]:
+        c.fill = fill
+        c.font = font
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
     for row in df.itertuples(index=False):
-        ws.append([sanitize_text(v) for v in row])
+        ws.append([clean_text(v) for v in row])
 
-    for row in ws.iter_rows(
-        min_row=2,
-        max_row=ws.max_row,
-        min_col=1,
-        max_col=ws.max_column
-    ):
-        for cell in row:
-            cell.font = data_font
-            cell.border = border
-            value_string = str(cell.value or "").strip()
+    for row in ws.iter_rows(min_row=2):
+        for c in row:
+            c.font = body_font
+            c.border = border
+            s = str(c.value or "").strip()
+            c.alignment = Alignment(
+                horizontal="right" if re.fullmatch(r"-?[\d,]+(?:\.\d+)?", s) else "left",
+                vertical="center"
+            )
 
-            if re.match(r"^-?[\d,]+(\.\d+)?$", value_string):
-                cell.alignment = Alignment(horizontal="right")
-            else:
-                cell.alignment = Alignment(horizontal="left")
-
-    for column in ws.columns:
-        max_length = max(
-            len(str(cell.value or "")) for cell in column
-        )
-        letter = get_column_letter(column[0].column)
-        ws.column_dimensions[letter].width = min(
-            max(max_length + 3, 12),
-            50
-        )
+    for col in ws.columns:
+        n = min(max(max(len(str(c.value or "")) for c in col) + 3, 12), 55)
+        ws.column_dimensions[get_column_letter(col[0].column)].width = n
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-
-    wb.save(output)
-    output.seek(0)
-    return output.getvalue()
+    wb.save(out)
+    return out.getvalue()
 
 
-# =========================================================
-# FILE DECODING
-# =========================================================
-
-def decode_text(data):
-    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin1"):
-        try:
-            return data.decode(encoding), encoding
-        except UnicodeDecodeError:
-            pass
-    return data.decode("latin1", errors="replace"), "latin1-replace"
-
-
-def decompress_gzip(data):
-    try:
-        return gzip.decompress(data)
-    except Exception as e:
-        raise ValueError(f"GZIP decompression failed: {e}")
-
-
-# =========================================================
-# EXTRACT ZIP FILES
-# =========================================================
-
-def extract_input_files(uploaded_name, uploaded_bytes):
-    """
-    Returns:
-        file_items = [(display_name, raw_text_bytes), ...]
-        diagnostics = list of dictionaries
-    """
-
-    file_items = []
-    diagnostics = []
-
-    lower_name = uploaded_name.lower()
-
-    # -------------------------------
-    # ZIP
-    # -------------------------------
-    if lower_name.endswith(".zip"):
-
-        with zipfile.ZipFile(io.BytesIO(uploaded_bytes), "r") as z:
-            infos = z.infolist()
-
-            for info in infos:
-
-                if info.is_dir():
-                    continue
-
-                archive_name = info.filename
-                base_name = os.path.basename(archive_name)
-
-                if not base_name or base_name.startswith("."):
-                    continue
-
-                try:
-                    raw = z.read(info)
-
-                    if base_name.lower().endswith(".gz"):
-                        raw = decompress_gzip(raw)
-                        logical_name = os.path.splitext(base_name)[0]
-                        compression = "GZIP → TXT"
-                    else:
-                        logical_name = base_name
-                        compression = "Plain"
-
-                    file_items.append((logical_name, raw))
-
-                    diagnostics.append({
-                        "File": archive_name,
-                        "Size (KB)": round(len(raw) / 1024, 1),
-                        "Type": compression,
-                        "Status": "Extracted"
-                    })
-
-                except Exception as e:
-                    diagnostics.append({
-                        "File": archive_name,
-                        "Size (KB)": 0,
-                        "Type": "Unknown",
-                        "Status": f"ERROR: {e}"
-                    })
-
-        return file_items, diagnostics
-
-    # -------------------------------
-    # Standalone GZ
-    # -------------------------------
-    if lower_name.endswith(".gz"):
-
-        raw = decompress_gzip(uploaded_bytes)
-        logical_name = os.path.splitext(uploaded_name)[0]
-
-        file_items.append((logical_name, raw))
-
-        diagnostics.append({
-            "File": uploaded_name,
-            "Size (KB)": round(len(raw) / 1024, 1),
-            "Type": "GZIP → TXT",
-            "Status": "Extracted"
-        })
-
-        return file_items, diagnostics
-
-    # -------------------------------
-    # Plain TXT / CSV / DAT / LOG
-    # -------------------------------
-
-    file_items.append((uploaded_name, uploaded_bytes))
-
-    diagnostics.append({
-        "File": uploaded_name,
-        "Size (KB)": round(len(uploaded_bytes) / 1024, 1),
-        "Type": "Plain",
-        "Status": "Ready"
-    })
-
-    return file_items, diagnostics
-
-
-# =========================================================
-# USER UPLOAD
-# =========================================================
-
-uploaded_file = st.file_uploader(
+uploaded = st.file_uploader(
     "📁 ZIP / TXT / GZ ફાઇલ પસંદ કરો",
     type=None,
     accept_multiple_files=False,
-    key="bank_report_upload",
-    help="તમારી Bank Report ZIP અથવા TXT/GZ file પસંદ કરો"
+    key="upload"
 )
 
-
-if uploaded_file is not None:
-
-    uploaded_name = uploaded_file.name
-    uploaded_bytes = uploaded_file.getvalue()
-
-    st.info(
-        f"📄 **{uploaded_name}**  •  "
-        f"📦 {len(uploaded_bytes) / 1024 / 1024:.2f} MB"
-    )
+if uploaded:
+    raw_upload = uploaded.getvalue()
+    st.info(f"📄 {uploaded.name}  •  {len(raw_upload)/1024/1024:.2f} MB")
 
     try:
-
-        file_items, diagnostics = extract_input_files(
-            uploaded_name,
-            uploaded_bytes
-        )
-
+        file_items, file_info = extract_files(uploaded.name, raw_upload)
     except zipfile.BadZipFile:
-
-        st.error("❌ ZIP file valid નથી અથવા corrupt છે.")
+        st.error("❌ ZIP file corrupt/invalid છે.")
         st.stop()
-
     except Exception as e:
-
-        st.error(f"❌ File reading error: {e}")
+        st.error(f"❌ Upload વાંચવામાં ભૂલ: {e}")
         st.stop()
 
-    # ---------------------------------------------
-    # ZIP / GZ diagnostic
-    # ---------------------------------------------
+    st.success(f"✅ {len(file_items)} report files extracted/read.")
 
-    if lower_name := uploaded_name.lower():
-        if lower_name.endswith(".zip") or lower_name.endswith(".gz"):
-
-            st.success(
-                f"✅ {len(file_items)} report files successfully extracted/read."
-            )
-
-            with st.expander("📋 Files found inside upload"):
-
-                if diagnostics:
-                    st.dataframe(
-                        pd.DataFrame(diagnostics),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-    total_files = len(file_items)
-
-    if total_files == 0:
-        st.warning(
-            "⚠️ Uploadની અંદર કોઈ process કરી શકાય તેવી file મળી નથી."
+    with st.expander("📋 Files found inside upload", expanded=False):
+        st.dataframe(
+            pd.DataFrame(file_info, columns=["FILE","SIZE BYTES","STATUS"]),
+            use_container_width=True,
+            hide_index=True
         )
-        st.stop()
 
-    # ---------------------------------------------
-    # Convert
-    # ---------------------------------------------
-
-    if st.button(
-        "🚀 CONVERT TO EXCEL",
-        type="primary",
-        use_container_width=True
-    ):
-
+    if st.button("🚀 CONVERT TO EXCEL", type="primary", use_container_width=True):
         progress = st.progress(0)
         status = st.empty()
+        converted = {}
+        failed = []
+        parser_counts = {}
 
-        converted_files = {}
-        failed_files = []
-
-        for index, (filename, raw_bytes) in enumerate(file_items):
-
-            status.text(
-                f"⏳ Processing: {filename} "
-                f"({index + 1}/{total_files})"
-            )
-
+        for i, (filename, raw) in enumerate(file_items):
+            status.text(f"⏳ Processing {filename} ({i+1}/{len(file_items)})")
             try:
-
-                content_string, encoding = decode_text(raw_bytes)
-
-                df = parse_report(content_string)
-
+                text = decode_bytes(raw)
+                df, parser = parse_report(text)
                 if df is None or df.empty:
-                    failed_files.append(
-                        f"{filename} — Data structure not recognized"
-                    )
+                    failed.append(f"{filename} — format not recognized")
                 else:
-
-                    excel_data = convert_to_excel(df)
-
-                    base_name = os.path.splitext(
-                        os.path.basename(filename)
-                    )[0]
-
-                    output_name = f"{base_name}.xlsx"
-
-                    converted_files[output_name] = excel_data
-
+                    parser_counts[parser] = parser_counts.get(parser, 0) + 1
+                    base = os.path.splitext(os.path.basename(filename))[0]
+                    converted[base + ".xlsx"] = make_excel(df)
             except Exception as e:
-
-                failed_files.append(
-                    f"{filename} — {e}"
-                )
-
-            progress.progress(
-                (index + 1) / total_files
-            )
+                failed.append(f"{filename} — {e}")
+            progress.progress((i+1)/len(file_items))
 
         status.empty()
         progress.empty()
 
-        st.divider()
+        st.success(f"✅ Conversion completed: {len(converted)} / {len(file_items)}")
 
-        st.success(
-            f"✅ Conversion completed: "
-            f"{len(converted_files)} / {total_files}"
-        )
+        with st.expander("🔎 Parser used"):
+            st.write(parser_counts)
 
-        if failed_files:
+        if failed:
+            with st.expander(f"⚠️ Failed / not recognized ({len(failed)})"):
+                for x in failed:
+                    st.write("• " + x)
 
-            with st.expander(
-                f"⚠️ Failed / Not recognized ({len(failed_files)})"
-            ):
-                for item in failed_files:
-                    st.write(f"• {item}")
-
-        # -----------------------------------------
-        # One Excel
-        # -----------------------------------------
-
-        if len(converted_files) == 1:
-
-            output_name, excel_data = next(
-                iter(converted_files.items())
-            )
-
+        if len(converted) == 1:
+            name, data = next(iter(converted.items()))
             st.download_button(
-                label=f"📥 DOWNLOAD {output_name}",
-                data=excel_data,
-                file_name=output_name,
-                mime=(
-                    "application/vnd.openxmlformats-"
-                    "officedocument.spreadsheetml.sheet"
-                ),
+                f"📥 DOWNLOAD {name}",
+                data=data,
+                file_name=name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-
-        # -----------------------------------------
-        # Multiple Excel files
-        # -----------------------------------------
-
-        elif len(converted_files) > 1:
-
-            result_zip = io.BytesIO()
-
-            with zipfile.ZipFile(
-                result_zip,
-                "w",
-                zipfile.ZIP_DEFLATED
-            ) as z:
-
-                for filename, excel_data in converted_files.items():
-                    z.writestr(filename, excel_data)
-
-            result_zip.seek(0)
-
+        elif len(converted) > 1:
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                for name, data in converted.items():
+                    z.writestr(name, data)
             st.download_button(
-                label=(
-                    f"📦 DOWNLOAD ALL EXCEL FILES "
-                    f"({len(converted_files)} FILES)"
-                ),
-                data=result_zip.getvalue(),
+                f"📦 DOWNLOAD ALL EXCEL FILES ({len(converted)})",
+                data=buf.getvalue(),
                 file_name="Converted_Bank_Reports.zip",
                 mime="application/zip",
                 use_container_width=True
             )
-
         else:
-
-            st.error(
-                "❌ એક પણ report Excelમાં convert થઈ શક્યો નથી."
-            )
-            
+            st.error("❌ એક પણ report Excelમાં convert થઈ શક્યો નથી.")
+                  
