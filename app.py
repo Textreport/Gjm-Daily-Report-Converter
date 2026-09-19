@@ -197,6 +197,48 @@ def parse_glcc_detail(lines):
 
 
 
+def parse_loans_balance(lines):
+    """Parse Loans Balance File using its stable 2+ whitespace field layout."""
+    rows = []
+    for line in lines:
+        s = line.strip()
+        if not re.match(r"^\d{10,16}\s", s):
+            continue
+        parts = [clean_text(x) for x in re.split(r"\s{2,}", s) if x.strip()]
+        # Expected fields:
+        # ACCOUNT NO, ACCOUNT TYPE, CUSTOMER NAME, LIMIT, INT RATE,
+        # THEO BALANCE, OUTSTANDING, IRREGULARITY, SANCTION DATE,
+        # EMIS DUE, EMIS PAID, EMIS OVERDUE, NEW IRAC, OLD IRAC,
+        # ADV PAID AMT, ARREAR COND, CURRENCY, ACCT-MTAIN-BRCH
+        if len(parts) != 18:
+            continue
+        rows.append(parts)
+
+    if not rows:
+        return None
+
+    return pd.DataFrame(rows, columns=[
+        "ACCOUNT NO",
+        "ACCOUNT TYPE (DESCRIPTION)",
+        "CUSTOMER NAME",
+        "LIMIT",
+        "INT RATE",
+        "THEO. BALANCE",
+        "OUTSTANDING",
+        "IRREGULARITY",
+        "SANCTION DATE",
+        "EMIS DUE",
+        "EMIS PAID",
+        "EMIS OVERDUE",
+        "NEW IRAC",
+        "OLD IRAC",
+        "ADV PAID AMT",
+        "ARREAR COND",
+        "CURRENCY",
+        "ACCT-MTAIN-BRCH",
+    ])
+
+
 def parse_daily_productwise(lines):
     # This report is pipe-delimited. Ignore visual/group headers and totals.
     rows = []
@@ -302,6 +344,11 @@ def parse_report(text):
     u = text.upper()
 
     # Specific parsers first.
+    if "LOANS BALANCE FILE" in u and "ACCOUNT TYPE (DESCRIPTION)" in u:
+        df = parse_loans_balance(lines)
+        if df is not None and not df.empty:
+            return df, "LOANS_BALANCE"
+
     if "NPA / OVERDUE STATEMENT REPORT" in u and "BAL_OUTSTAND" in u:
         df = parse_npa(lines)
         if df is not None and not df.empty:
@@ -551,4 +598,3 @@ if uploaded:
             )
         else:
             st.error("❌ એક પણ report Excelમાં convert થઈ શક્યો નથી.")
-                  
