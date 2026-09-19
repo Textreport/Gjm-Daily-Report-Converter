@@ -512,89 +512,113 @@ def make_excel(df):
 
 
 uploaded = st.file_uploader(
-    "📁 ZIP / TXT / GZ ફાઇલ પસંદ કરો",
-    type=None,
-    accept_multiple_files=False,
-    key="upload"
+    "📁 ZIP / TXT / GZ / CSV ફાઇલ પસંદ કરો",
+    type=["zip", "txt", "gz", "csv", "dat", "log"],
+    accept_multiple_files=True,
+    key="upload",
+    help="Mobileમાં એક અથવા ઘણી TXT files પસંદ કરી શકો છો. ZIPમાં રહેલી TXT/TXT.GZ files પણ વાંચાશે."
 )
 
 if uploaded:
-    raw_upload = uploaded.getvalue()
-    st.info(f"📄 {uploaded.name}  •  {len(raw_upload)/1024/1024:.2f} MB")
+    # Streamlit returns a list when accept_multiple_files=True.
+    # Keep the rest of the conversion pipeline unchanged by combining
+    # all uploaded files into one file_items list.
+    file_items = []
+    file_info = []
+    upload_errors = []
 
-    try:
-        file_items, file_info = extract_files(uploaded.name, raw_upload)
-    except zipfile.BadZipFile:
-        st.error("❌ ZIP file corrupt/invalid છે.")
-        st.stop()
-    except Exception as e:
-        st.error(f"❌ Upload વાંચવામાં ભૂલ: {e}")
-        st.stop()
+    for uploaded_file in uploaded:
+        try:
+            raw_upload = uploaded_file.getvalue()
+            st.caption(f"📄 {uploaded_file.name} • {len(raw_upload)/1024/1024:.2f} MB")
 
-    st.success(f"✅ {len(file_items)} report files extracted/read.")
+            items, info = extract_files(uploaded_file.name, raw_upload)
+            file_items.extend(items)
+            file_info.extend(info)
+        except zipfile.BadZipFile:
+            upload_errors.append(f"{uploaded_file.name} — ZIP file corrupt/invalid")
+        except Exception as e:
+            upload_errors.append(f"{uploaded_file.name} — {e}")
 
-    with st.expander("📋 Files found inside upload", expanded=False):
-        st.dataframe(
-            pd.DataFrame(file_info, columns=["FILE","SIZE BYTES","STATUS"]),
-            use_container_width=True,
-            hide_index=True
-        )
+    if upload_errors:
+        with st.expander(f"⚠️ Upload errors ({len(upload_errors)})", expanded=True):
+            for x in upload_errors:
+                st.write("• " + x)
 
-    if st.button("🚀 CONVERT TO EXCEL", type="primary", use_container_width=True):
-        progress = st.progress(0)
-        status = st.empty()
-        converted = {}
-        failed = []
-        parser_counts = {}
+    if file_items:
+        st.success(f"✅ {len(file_items)} report files ready for conversion.")
 
-        for i, (filename, raw) in enumerate(file_items):
-            status.text(f"⏳ Processing {filename} ({i+1}/{len(file_items)})")
-            try:
-                text = decode_bytes(raw)
-                df, parser = parse_report(text)
-                if df is None or df.empty:
-                    failed.append(f"{filename} — format not recognized")
-                else:
-                    parser_counts[parser] = parser_counts.get(parser, 0) + 1
-                    base = os.path.splitext(os.path.basename(filename))[0]
-                    converted[base + ".xlsx"] = make_excel(df)
-            except Exception as e:
-                failed.append(f"{filename} — {e}")
-            progress.progress((i+1)/len(file_items))
-
-        status.empty()
-        progress.empty()
-
-        st.success(f"✅ Conversion completed: {len(converted)} / {len(file_items)}")
-
-        with st.expander("🔎 Parser used"):
-            st.write(parser_counts)
-
-        if failed:
-            with st.expander(f"⚠️ Failed / not recognized ({len(failed)})"):
-                for x in failed:
-                    st.write("• " + x)
-
-        if len(converted) == 1:
-            name, data = next(iter(converted.items()))
-            st.download_button(
-                f"📥 DOWNLOAD {name}",
-                data=data,
-                file_name=name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+        with st.expander("📋 Files ready for conversion", expanded=False):
+            st.dataframe(
+                pd.DataFrame(file_info, columns=["FILE", "SIZE BYTES", "STATUS"]),
+                use_container_width=True,
+                hide_index=True
             )
-        elif len(converted) > 1:
-            buf = io.BytesIO()
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-                for name, data in converted.items():
-                    z.writestr(name, data)
-            st.download_button(
-                f"📦 DOWNLOAD ALL EXCEL FILES ({len(converted)})",
-                data=buf.getvalue(),
-                file_name="Converted_Bank_Reports.zip",
-                mime="application/zip",
-                use_container_width=True
-            )
-        else:
-            st.error("❌ એક પણ report Excelમાં convert થઈ શક્યો નથી.")
+
+        if st.button("🚀 CONVERT TO EXCEL", type="primary", use_container_width=True):
+            progress = st.progress(0)
+            status = st.empty()
+            converted = {}
+            failed = []
+            parser_counts = {}
+
+            for i, (filename, raw) in enumerate(file_items):
+                status.text(f"⏳ Processing {filename} ({i+1}/{len(file_items)})")
+                try:
+                    text = decode_bytes(raw)
+                    df, parser = parse_report(text)
+                    if df is None or df.empty:
+                        failed.append(f"{filename} — format not recognized")
+                    else:
+                        parser_counts[parser] = parser_counts.get(parser, 0) + 1
+                        base = os.path.splitext(os.path.basename(filename))[0]
+                        output_name = base + ".xlsx"
+                        # Avoid overwriting when two uploaded files have the same name.
+                        if output_name in converted:
+                            n = 2
+                            while f"{base}_{n}.xlsx" in converted:
+                                n += 1
+                            output_name = f"{base}_{n}.xlsx"
+                        converted[output_name] = make_excel(df)
+                except Exception as e:
+                    failed.append(f"{filename} — {e}")
+                progress.progress((i+1)/len(file_items))
+
+            status.empty()
+            progress.empty()
+
+            st.success(f"✅ Conversion completed: {len(converted)} / {len(file_items)}")
+
+            with st.expander("🔎 Parser used"):
+                st.write(parser_counts)
+
+            if failed:
+                with st.expander(f"⚠️ Failed / not recognized ({len(failed)})"):
+                    for x in failed:
+                        st.write("• " + x)
+
+            if len(converted) == 1:
+                name, data = next(iter(converted.items()))
+                st.download_button(
+                    f"📥 DOWNLOAD {name}",
+                    data=data,
+                    file_name=name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            elif len(converted) > 1:
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                    for name, data in converted.items():
+                        z.writestr(name, data)
+                buf.seek(0)
+                st.download_button(
+                    f"📦 DOWNLOAD ALL EXCEL FILES ({len(converted)} FILES)",
+                    data=buf.getvalue(),
+                    file_name="Converted_Bank_Reports.zip",
+                    mime="application/zip",
+                    use_container_width=True
+                )
+    else:
+        st.warning("⚠️ કોઈ readable TXT/ZIP/GZ file મળેલી નથી.")
+
