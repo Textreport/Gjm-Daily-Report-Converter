@@ -513,7 +513,9 @@ def make_excel(df):
 
 uploaded = st.file_uploader(
     "📁 ZIP / TXT / GZ / CSV ફાઇલ પસંદ કરો",
-    type=["zip", "txt", "gz", "csv", "dat", "log"],
+    # Do NOT restrict MIME/extensions here. Some Android file pickers
+    # classify TXT files differently and then show them as disabled.
+    type=None,
     accept_multiple_files=True,
     key="upload",
     help="Mobileમાં એક અથવા ઘણી TXT files પસંદ કરી શકો છો. ZIPમાં રહેલી TXT/TXT.GZ files પણ વાંચાશે."
