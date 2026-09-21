@@ -511,55 +511,98 @@ def make_excel(df):
     return out.getvalue()
 
 
-def _save_uploaded_files():
-    """Copy browser-uploaded bytes into Session State immediately.
-    This prevents the files from disappearing on the next Streamlit rerun
-    (for example when the user presses CONVERT TO EXCEL).
+def _add_uploaded_file():
+    """Save one uploaded file into Session State.
+
+    The uploader is intentionally single-file and inside a form.  This avoids
+    relying on the mobile browser to keep a multi-file picker alive across
+    Streamlit reruns.  The bytes are copied immediately into Session State.
     """
-    selected = st.session_state.get("upload_widget", [])
-    saved = []
-    for f in selected:
-        try:
-            saved.append({
-                "name": f.name,
-                "data": f.getvalue(),
-                "mime": getattr(f, "type", "") or "application/octet-stream",
-            })
-        except Exception:
-            pass
-    st.session_state["saved_uploads"] = saved
+    f = st.session_state.get("upload_one")
+    if f is None:
+        st.session_state["upload_message"] = "⚠️ પહેલાં એક ZIP / TXT / GZ / CSV ફાઇલ પસંદ કરો."
+        return
+
+    try:
+        data = f.getvalue()
+        if not data:
+            st.session_state["upload_message"] = "⚠️ પસંદ કરેલી ફાઇલ ખાલી છે."
+            return
+
+        name = os.path.basename(f.name)
+        existing_names = {x["name"] for x in st.session_state.get("saved_uploads", [])}
+
+        # Keep duplicate filenames instead of silently overwriting.
+        if name in existing_names:
+            stem, ext = os.path.splitext(name)
+            n = 2
+            while f"{stem}_{n}{ext}" in existing_names:
+                n += 1
+            name = f"{stem}_{n}{ext}"
+
+        st.session_state.setdefault("saved_uploads", []).append({
+            "name": name,
+            "data": data,
+            "mime": getattr(f, "type", "") or "application/octet-stream",
+        })
+        st.session_state["upload_message"] = f"✅ {name} સુરક્ષિત રીતે ઉમેરાઈ ગઈ છે."
+    except Exception as e:
+        st.session_state["upload_message"] = f"❌ Upload error: {e}"
+
+
+def _clear_uploaded_files():
+    st.session_state["saved_uploads"] = []
+    st.session_state["upload_message"] = "🗑️ Upload list સાફ થઈ ગઈ છે."
 
 
 if "saved_uploads" not in st.session_state:
     st.session_state["saved_uploads"] = []
+if "upload_message" not in st.session_state:
+    st.session_state["upload_message"] = ""
 
-st.file_uploader(
-    "📁 ZIP / TXT / GZ / CSV ફાઇલ પસંદ કરો",
-    # No extension/MIME filter: Android file pickers can report TXT files
-    # with different MIME types. Streamlit therefore accepts all files here;
-    # the server-side code decides what it can read.
-    type=None,
-    accept_multiple_files=True,
-    key="upload_widget",
-    on_change=_save_uploaded_files,
-    max_upload_size=500,
-    help=(
-        "Mobileમાં એક અથવા ઘણી files પસંદ કરી શકો છો. "
-        "એકવારમાં અનેક files પસંદ ન થાય તો Upload/Browse ફરી દબાવીને "
-        "વધુ files પણ ઉમેરો. ZIPમાં રહેલી TXT/TXT.GZ files પણ વાંચાશે."
-    ),
-)
+# IMPORTANT: use a single-file uploader inside a form.  On Android/iPhone,
+# multi-file pickers can behave differently depending on the Files app/browser.
+# A single-file form is much more deterministic: choose -> ADD FILE -> server
+# receives the bytes -> we persist them in Session State.
+with st.form("upload_form", clear_on_submit=True, border=True):
+    st.markdown("### 📤 Report Upload")
+    st.caption(
+        "Mobile માટે stable mode: એક વખતે એક ZIP/TXT/GZ/CSV પસંદ કરો અને "
+        "**ADD FILE** દબાવો. ZIPમાં ઘણી TXT reports હોય તો પણ એક ZIP પૂરતું છે."
+    )
+    st.file_uploader(
+        "📁 ZIP / TXT / GZ / CSV પસંદ કરો",
+        type=None,
+        accept_multiple_files=False,
+        key="upload_one",
+        max_upload_size=500,
+        help="એક વખતે એક ફાઇલ પસંદ કરો. ZIP ફાઇલમાં રહેલી TXT reports પણ વાંચાશે.",
+    )
+    st.form_submit_button(
+        "➕ ADD FILE",
+        type="primary",
+        use_container_width=True,
+        on_click=_add_uploaded_file,
+    )
+
+if st.session_state.get("upload_message"):
+    st.info(st.session_state["upload_message"])
+    st.session_state["upload_message"] = ""
 
 saved_uploads = st.session_state.get("saved_uploads", [])
 
-# A clear button is deliberately separate from the uploader. It is not
-# attached to the uploader's widget state, so it safely clears our saved copy.
 if saved_uploads:
-    st.info(f"📦 {len(saved_uploads)} file(s) સુરક્ષિત રીતે upload થઈ ગઈ છે.")
+    st.success(f"📦 {len(saved_uploads)} file(s) સુરક્ષિત રીતે તૈયાર છે.")
 
-    if st.button("🗑️ Clear uploaded files", use_container_width=True):
-        st.session_state["saved_uploads"] = []
-        st.rerun()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.button(
+            "🗑️ CLEAR ALL",
+            use_container_width=True,
+            on_click=_clear_uploaded_files,
+        )
+    with col2:
+        st.caption("વધુ ફાઇલ ઉમેરવા ઉપરનું ADD FILE ફરી વાપરો.")
 
     file_items = []
     file_info = []
@@ -686,20 +729,13 @@ if saved_uploads:
                     buf,
                     "w",
                     zipfile.ZIP_DEFLATED
-                ) as z:
+                ) as zout:
                     for name, data in converted.items():
-                        z.writestr(name, data)
-                buf.seek(0)
-
+                        zout.writestr(name, data)
                 st.download_button(
-                    f"📦 DOWNLOAD ALL EXCEL FILES "
-                    f"({len(converted)} FILES)",
+                    "📦 DOWNLOAD ALL EXCEL FILES (ZIP)",
                     data=buf.getvalue(),
                     file_name="Converted_Bank_Reports.zip",
                     mime="application/zip",
                     use_container_width=True
                 )
-    else:
-        st.warning(
-            "⚠️ Uploadમાંથી કોઈ readable TXT/ZIP/GZ file મળેલી નથી."
-        )
