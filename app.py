@@ -46,6 +46,14 @@ if "saved_uploads" not in st.session_state:
 if "upload_message" not in st.session_state:
     st.session_state["upload_message"] = ""
 
+def _clear_uploaded_files():
+    """Clear persisted uploads and reset the uploader widget state."""
+    st.session_state["saved_uploads"] = []
+    st.session_state["upload_message"] = ""
+    # Reset the uploader on the next rerun so the just-cleared file is not re-added.
+    st.session_state["mobile_upload_v3"] = None
+
+
 st.markdown("### 📤 Report Upload")
 st.caption("Mobile + Desktop • ZIP / TXT / GZ / CSV • એક વખતે એક file પસંદ કરો")
 
