@@ -45,13 +45,20 @@ if "saved_uploads" not in st.session_state:
     st.session_state["saved_uploads"] = []
 if "upload_message" not in st.session_state:
     st.session_state["upload_message"] = ""
+if "cleared_upload_signature" not in st.session_state:
+    st.session_state["cleared_upload_signature"] = ""
 
 def _clear_uploaded_files():
-    """Clear persisted uploads and reset the uploader widget state."""
+    """Clear saved uploads without modifying the file_uploader widget state."""
+    current = st.session_state.get("mobile_upload")
+    if current is not None:
+        try:
+            data = current.getvalue()
+            st.session_state["cleared_upload_signature"] = f"{current.name}:{len(data)}"
+        except Exception:
+            st.session_state["cleared_upload_signature"] = ""
     st.session_state["saved_uploads"] = []
     st.session_state["upload_message"] = ""
-    # Reset the uploader on the next rerun so the just-cleared file is not re-added.
-    st.session_state["mobile_upload_v3"] = None
 
 
 st.markdown("### 📤 Report Upload")
@@ -63,7 +70,7 @@ uploaded_file = st.file_uploader(
     "📁 SELECT ZIP / TXT / GZ / CSV FILE",
     type=["zip", "txt", "gz", "csv"],
     accept_multiple_files=False,
-    key="mobile_upload_v3",
+    key="mobile_upload",
     help="ZIPમાં 100+ TXT reports હોય તો ZIP upload કરો.",
 )
 
@@ -72,7 +79,14 @@ if uploaded_file is not None:
         data = uploaded_file.getvalue()
         if data:
             current_name = os.path.basename(uploaded_file.name)
-            existing_names = {x.get("name", "") for x in st.session_state["saved_uploads"]}
+            source_signature = f"{current_name}:{len(data)}"
+            # After CLEAR ALL, Streamlit may still display the old selected file.
+            # Do not re-save that same selection until the user chooses another file.
+            if source_signature == st.session_state.get("cleared_upload_signature", ""):
+                saved_uploads = st.session_state.get("saved_uploads", [])
+                existing_names = {x.get("name", "") for x in saved_uploads}
+            else:
+                existing_names = {x.get("name", "") for x in st.session_state["saved_uploads"]}
             save_name = current_name
             if save_name in existing_names:
                 stem, ext = os.path.splitext(current_name)
@@ -82,14 +96,15 @@ if uploaded_file is not None:
                 save_name = f"{stem}_{n}{ext}"
             # Replace same widget selection in-place; duplicate additions are
             # handled by the renamed save_name above.
-            if not any(x.get("source_key") == f"{current_name}:{len(data)}" for x in st.session_state["saved_uploads"]):
-                st.session_state["saved_uploads"].append({
-                    "name": save_name,
-                    "data": data,
-                    "mime": getattr(uploaded_file, "type", "") or "application/octet-stream",
-                    "source_key": f"{current_name}:{len(data)}",
-                })
-            st.success(f"✅ {save_name} સુરક્ષિત રીતે ઉમેરાઈ ગઈ છે.")
+            if source_signature != st.session_state.get("cleared_upload_signature", ""):
+                if not any(x.get("source_key") == source_signature for x in st.session_state["saved_uploads"]):
+                    st.session_state["saved_uploads"].append({
+                        "name": save_name,
+                        "data": data,
+                        "mime": getattr(uploaded_file, "type", "") or "application/octet-stream",
+                        "source_key": source_signature,
+                    })
+                st.success(f"✅ {save_name} સુરક્ષિત રીતે ઉમેરાઈ ગઈ છે.")
         else:
             st.warning("⚠️ પસંદ કરેલી file ખાલી છે.")
     except Exception as e:
@@ -99,10 +114,6 @@ saved_uploads = st.session_state.get("saved_uploads", [])
 
 if saved_uploads:
     st.info(f"📦 {len(saved_uploads)} file(s) તૈયાર છે.")
-    if st.button("🗑️ CLEAR ALL UPLOADS", use_container_width=True):
-        st.session_state["saved_uploads"] = []
-        st.rerun()
-
 
 
 IGNORE_PATTERNS = [
